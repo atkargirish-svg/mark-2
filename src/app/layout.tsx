@@ -19,7 +19,22 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} font-sans antialiased bg-slate-50 text-slate-900 selection:bg-sky-500/20`}>
+      <body className={`${inter.variable} font-sans antialiased bg-[#0a0f14] text-white selection:bg-yellow-500/20`}>
+        {/* Background Video Layer */}
+        <div className="fixed inset-0 z-[-10] overflow-hidden pointer-events-none">
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
+            className="w-full h-full object-cover opacity-40"
+          >
+            <source src="/bg.mp4" type="video/mp4" />
+          </video>
+          {/* Subtle tech overlay */}
+          <div className="absolute inset-0 bg-gradient-to-b from-[#0a0f14]/80 via-transparent to-[#0a0f14]/90" />
+        </div>
+
         <FirebaseClientProvider>
           <AppProvider>
             {children}

@@ -243,7 +243,6 @@ export default function REVOConsole() {
       
       utterance.lang = langConfig.code;
       
-      // Improve voice selection
       const voices = window.speechSynthesis.getVoices();
       const voice = voices.find(v => v.lang === langConfig.code) || 
                     voices.find(v => v.lang.startsWith(langConfig.code.split('-')[0]));
@@ -308,7 +307,6 @@ export default function REVOConsole() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      // Warm up voices
       window.speechSynthesis?.getVoices();
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) setMessages(JSON.parse(saved));
@@ -327,13 +325,11 @@ export default function REVOConsole() {
   }, [messages, isProcessing]);
 
   return (
-    <div className="h-screen bg-[#0a0f14] flex flex-col p-4 md:p-6 font-sans text-white overflow-hidden relative">
-      <div className="hex-bg" />
-      <div className="angular-pattern" />
+    <div className="h-screen flex flex-col p-4 md:p-6 font-sans text-white overflow-hidden relative">
       <div className="scanline" />
 
-      {/* Header with Language Selector */}
-      <nav className="flex justify-between items-center mb-4 border-b border-yellow-500/20 pb-2 relative z-10 shrink-0">
+      {/* Header */}
+      <nav className="flex justify-between items-center mb-4 border-b border-yellow-500/20 pb-2 relative z-10 shrink-0 backdrop-blur-sm">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-yellow-500/10 flex items-center justify-center border border-yellow-500/30">
             <Activity className="text-yellow-500 w-4 h-4" />
@@ -373,7 +369,7 @@ export default function REVOConsole() {
           
           {/* JARVIS AI */}
           <TabsContent value="jarvis" className="w-full max-w-lg h-full flex flex-col items-center justify-center animate-in fade-in slide-in-from-bottom-4 duration-300">
-             <Card className="w-full h-[65vh] glass-card industrial-border overflow-hidden flex flex-col bg-black/40">
+             <Card className="w-full h-[65vh] glass-card industrial-border overflow-hidden flex flex-col">
                 <CardHeader className="p-3 border-b border-yellow-500/10 flex flex-row items-center justify-between">
                    <div className="flex items-center gap-2">
                       <Bot size={16} className="text-yellow-500" />
@@ -398,7 +394,7 @@ export default function REVOConsole() {
                       </div>
                    </ScrollArea>
                 </CardContent>
-                <CardFooter className="p-4 border-t border-yellow-500/10 bg-black/40 flex flex-col items-center gap-3 shrink-0">
+                <CardFooter className="p-4 border-t border-yellow-500/10 bg-black/20 flex flex-col items-center gap-3 shrink-0">
                    <p className="text-[8px] font-black uppercase tracking-[0.3em] text-yellow-500 animate-pulse">
                       {isProcessing ? "PROCESSING" : (isHolding ? "LISTENING" : "HOLD TO COMMAND")}
                    </p>
@@ -427,7 +423,7 @@ export default function REVOConsole() {
                       { id: 'elbow', label: 'REACH' },
                       { id: 'pickup', label: 'CLAW' }
                     ].map((motor) => (
-                      <Card key={motor.id} className="glass-card industrial-border p-3 bg-black/40 border-yellow-500/10">
+                      <Card key={motor.id} className="glass-card industrial-border p-3 border-yellow-500/10">
                          <div className="flex justify-between items-center mb-2">
                             <span className="text-[8px] font-black uppercase text-zinc-500 tracking-wider">{motor.label}</span>
                             <span className="text-[10px] font-mono text-yellow-500">{Math.round(localState[motor.id as keyof ArmState])}°</span>
@@ -465,7 +461,7 @@ export default function REVOConsole() {
                     </Button>
                 </div>
 
-                <Card className="w-full glass-card industrial-border p-3 bg-black/40 border-yellow-500/5">
+                <Card className="w-full glass-card industrial-border p-3 border-yellow-500/5">
                     <div className="flex justify-between items-center">
                        <div className="flex gap-4">
                           <div className="flex flex-col">
@@ -488,7 +484,7 @@ export default function REVOConsole() {
 
           {/* ANALOG - JOYSTICK */}
           <TabsContent value="analog" className="w-full max-w-lg h-full flex flex-col items-center justify-center animate-in fade-in duration-300 touch-none select-none">
-             <Card className="w-full glass-card industrial-border p-8 flex flex-col items-center gap-8 bg-black/40 relative">
+             <Card className="w-full glass-card industrial-border p-8 flex flex-col items-center gap-8 relative">
                 <div className="absolute top-4 right-4 flex items-center gap-2">
                     <span className="text-[8px] font-black uppercase text-zinc-500">Auto-Level</span>
                     <Switch checked={isLevelLock} onCheckedChange={setIsLevelLock} className="scale-75 data-[state=checked]:bg-yellow-500" />
@@ -553,7 +549,7 @@ export default function REVOConsole() {
 
           {/* GYRO - MOTION CONTROL */}
           <TabsContent value="gyro" className="w-full max-w-lg h-full flex flex-col items-center justify-center animate-in fade-in duration-300 touch-none select-none">
-             <Card className="w-full glass-card industrial-border p-8 flex flex-col items-center justify-center gap-8 bg-black/40 relative">
+             <Card className="w-full glass-card industrial-border p-8 flex flex-col items-center justify-center gap-8 relative">
                 {!isGyroActive ? (
                    <div className="text-center space-y-6">
                       <div className="w-20 h-20 rounded-full bg-yellow-500/10 flex items-center justify-center border-2 border-yellow-500/20 mx-auto animate-pulse">
@@ -610,7 +606,7 @@ export default function REVOConsole() {
              </Card>
           </TabsContent>
 
-          {/* FLOATING CYLINDRIC NAVIGATION */}
+          {/* NAVIGATION */}
           <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-[94%] max-w-md">
              <TabsList className="bg-[#111821]/95 border border-yellow-500/30 p-1 rounded-full shadow-[0_0_40px_rgba(255,191,0,0.15)] backdrop-blur-2xl flex gap-1 h-auto items-center justify-between">
                 <TabsTrigger value="jarvis" className="rounded-full flex-1 h-11 data-[state=active]:bg-yellow-500 data-[state=active]:text-black transition-all">
