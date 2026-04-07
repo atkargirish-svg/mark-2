@@ -19,7 +19,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} font-sans antialiased text-white selection:bg-yellow-500/20 relative min-h-screen bg-black`}>
+      <body className={`${inter.variable} font-sans antialiased text-white selection:bg-yellow-500/20 relative min-h-screen bg-[#0a0f14]`}>
         {/* Background Video Container - Deepest Layer */}
         <div className="fixed inset-0 z-[-1] overflow-hidden pointer-events-none">
           <video
@@ -27,16 +27,13 @@ export default function RootLayout({
             muted
             loop
             playsInline
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover opacity-60"
           >
-            <source src="/bg.mp4" type="video/mp4" />
+            <source src="/veo/veo.mp4" type="video/mp4" />
           </video>
-          {/* Fallback background if video fails */}
-          <div className="absolute inset-0 bg-[#0a0f14] -z-10" />
-          
-          {/* Techy Overlays for UI Contrast */}
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" />
-          <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/20" />
+          {/* Subtle Gradient Overlays for UI Depth */}
+          <div className="absolute inset-0 bg-black/30 backdrop-blur-[1px]" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/40" />
         </div>
 
         {/* Content Layer - Top Layer */}
@@ -51,4 +48,3 @@ export default function RootLayout({
       </body>
     </html>
   );
-}
