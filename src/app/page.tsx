@@ -18,14 +18,14 @@ import { DEFAULT_ARM_STATE } from '@/lib/types';
 const STORAGE_KEY = 'revo_industrial_v28';
 
 const LANGUAGES = [
-  { id: 'English', label: 'English' },
-  { id: 'Hindi', label: 'हिन्दी (Hindi)' },
-  { id: 'Marathi', label: 'मराठी (Marathi)' },
-  { id: 'Gujarati', label: 'ગુજરાતી (Gujarati)' },
-  { id: 'Bengali', label: 'বাংলা (Bengali)' },
-  { id: 'Tamil', label: 'தமிழ் (Tamil)' },
-  { id: 'Telugu', label: 'తెలుగు (Telugu)' },
-  { id: 'Punjabi', label: 'ਪੰਜਾਬੀ (Punjabi)' },
+  { id: 'English', label: 'English', code: 'en-IN' },
+  { id: 'Hindi', label: 'हिन्दी (Hindi)', code: 'hi-IN' },
+  { id: 'Marathi', label: 'मराठी (Marathi)', code: 'mr-IN' },
+  { id: 'Gujarati', label: 'ગુજરાતી (Gujarati)', code: 'gu-IN' },
+  { id: 'Bengali', label: 'বাংলা (Bengali)', code: 'bn-IN' },
+  { id: 'Tamil', label: 'தமிழ் (Tamil)', code: 'ta-IN' },
+  { id: 'Telugu', label: 'తెలుగు (Telugu)', code: 'te-IN' },
+  { id: 'Punjabi', label: 'ਪੰਜਾਬੀ (Punjabi)', code: 'pa-IN' },
 ];
 
 export default function REVOConsole() {
@@ -90,12 +90,10 @@ export default function REVOConsole() {
 
   // Intro Interaction Logic
   const startIntroGestures = () => {
-    // 1. Reset all motors to home first
     const homeState = { ...DEFAULT_ARM_STATE, pickup: 0 };
     setLocalState(homeState);
     syncToFirebase(homeState);
 
-    // 2. Start claw open/close loop (1 sec delay)
     let currentClaw = 0;
     if (introIntervalRef.current) clearInterval(introIntervalRef.current);
     
@@ -114,7 +112,6 @@ export default function REVOConsole() {
       clearInterval(introIntervalRef.current);
       introIntervalRef.current = null;
     }
-    // Return claw to default open
     handleManualControl('pickup', 0);
   };
 
@@ -174,7 +171,7 @@ export default function REVOConsole() {
     let relativeBeta = beta - gyroOffset.beta;
     let relativeGamma = gamma - gyroOffset.gamma;
 
-    const DEADZONE = 4;
+    const DEADZONE = 5;
     const MAX_TILT = 45;
 
     if (Math.abs(relativeBeta) < DEADZONE) relativeBeta = 0;
@@ -235,7 +232,33 @@ export default function REVOConsole() {
     toast({ title: "Motion Calibrated" });
   };
 
-  // AI & Voice
+  // AI & Voice Logic
+  const speak = useCallback((text: string, isIntro: boolean = false) => {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      if (isMuted) return;
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      const langConfig = LANGUAGES.find(l => l.id === selectedLanguage) || LANGUAGES[1]; // Default Hindi
+      
+      utterance.lang = langConfig.code;
+      
+      // Improve voice selection
+      const voices = window.speechSynthesis.getVoices();
+      const voice = voices.find(v => v.lang === langConfig.code) || 
+                    voices.find(v => v.lang.startsWith(langConfig.code.split('-')[0]));
+      
+      if (voice) utterance.voice = voice;
+      
+      utterance.rate = 1.0;
+      utterance.onend = () => {
+        if (isIntro) stopIntroGestures();
+      };
+      
+      window.speechSynthesis.speak(utterance);
+    }
+  }, [isMuted, selectedLanguage]);
+
   const processCommand = async (transcript: string) => {
     if (!transcript.trim()) return;
     setIsProcessing(true);
@@ -264,9 +287,7 @@ export default function REVOConsole() {
       setMessages(prev => [...prev, assistantMsg]);
       setIsProcessing(false);
       
-      // Start Intro sequence if flag is set
       if (data.isIntro) startIntroGestures();
-      
       speak(assistantMsg.content, data.isIntro);
     } catch (error) {
       setIsProcessing(false);
@@ -276,7 +297,8 @@ export default function REVOConsole() {
   const startRecognition = () => {
     if (typeof window === 'undefined' || !('webkitSpeechRecognition' in window)) return;
     const recognition = new (window as any).webkitSpeechRecognition();
-    recognition.lang = selectedLanguage === 'English' ? 'en-US' : 'hi-IN';
+    const langConfig = LANGUAGES.find(l => l.id === selectedLanguage) || LANGUAGES[1];
+    recognition.lang = langConfig.code;
     recognition.onstart = () => { setIsHolding(true); currentTranscriptRef.current = ''; };
     recognition.onresult = (event: any) => { currentTranscriptRef.current = event.results[0][0].transcript; };
     recognition.onend = () => { setIsHolding(false); processCommand(currentTranscriptRef.current); };
@@ -284,29 +306,10 @@ export default function REVOConsole() {
     recognition.start();
   };
 
-  const speak = useCallback((text: string, isIntro: boolean = false) => {
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      if (isMuted) return;
-      const utterance = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      
-      // Find matching voice for language
-      const langCode = LANGUAGES.find(l => l.id === selectedLanguage)?.id || 'Hindi';
-      const voice = voices.find(v => v.lang.startsWith(langCode.substring(0, 2).toLowerCase()));
-      if (voice) utterance.voice = voice;
-      
-      utterance.rate = 1.0;
-      utterance.onend = () => {
-        if (isIntro) stopIntroGestures();
-      };
-      
-      window.speechSynthesis.speak(utterance);
-    }
-  }, [isMuted, selectedLanguage]);
-
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      // Warm up voices
+      window.speechSynthesis?.getVoices();
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) setMessages(JSON.parse(saved));
       else setMessages([{ id: '1', role: 'assistant', content: "REVO Mark II Professional Console Online. Good day, Boss." }]);
@@ -364,7 +367,7 @@ export default function REVOConsole() {
         </div>
       </nav>
 
-      {/* Main Content Area */}
+      {/* Main Content Area - Center Aligned */}
       <div className="flex-grow relative z-10 overflow-hidden flex flex-col items-center justify-center pb-24">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full h-full flex flex-col items-center justify-center">
           
