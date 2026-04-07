@@ -29,11 +29,12 @@
 
 @layer base {
   body {
-    @apply bg-[#0a0f14] text-white antialiased overflow-x-hidden;
+    /* Made background transparent so video is visible */
+    @apply bg-transparent text-white antialiased overflow-x-hidden;
   }
 }
 
-/* Make glass cards more transparent to see video */
+/* Glassmorphism for cards to see video behind them */
 .glass-card {
   @apply bg-black/40 border-[#1e293b] backdrop-blur-md shadow-2xl;
   box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5);

@@ -19,9 +19,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} font-sans antialiased text-white selection:bg-yellow-500/20 relative min-h-screen`}>
-        {/* Background Video Layer - Higher Z-index than body but lower than content */}
-        <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+      <body className={`${inter.variable} font-sans antialiased text-white selection:bg-yellow-500/20 relative min-h-screen bg-black`}>
+        {/* Background Video Container - Deepest Layer */}
+        <div className="fixed inset-0 z-[-1] overflow-hidden pointer-events-none">
           <video
             autoPlay
             muted
@@ -31,12 +31,15 @@ export default function RootLayout({
           >
             <source src="/bg.mp4" type="video/mp4" />
           </video>
-          {/* Subtle tech overlay for readability */}
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" />
-          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/20 to-black/80" />
+          {/* Fallback background if video fails */}
+          <div className="absolute inset-0 bg-[#0a0f14] -z-10" />
+          
+          {/* Techy Overlays for UI Contrast */}
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/20" />
         </div>
 
-        {/* Content Layer */}
+        {/* Content Layer - Top Layer */}
         <div className="relative z-10 min-h-screen">
           <FirebaseClientProvider>
             <AppProvider>
