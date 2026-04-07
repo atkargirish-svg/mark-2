@@ -1,0 +1,34 @@
+{
+  "placeholderImages": [
+    {
+      "id": "hero-background",
+      "description": "A modern factory with greenery around it, symbolizing sustainable industry.",
+      "imageUrl": "https://images.unsplash.com/photo-1763451327861-adce111d6603?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHwyfHxzdXN0YWluYWJsZSUyMGZhY3Rvcnl8ZW58MHx8fHwxNzcxMDk1NzU5fDA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "sustainable factory"
+    },
+    {
+      "id": "feature-data",
+      "description": "A dashboard showing charts and graphs.",
+      "imageUrl": "https://images.unsplash.com/photo-1560472354-b33ff0c44a43?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHwxMHx8ZGF0YSUyMGRhc2hib2FyZHxlbnwwfHx8fDE3NzEwNDE2NTN8MA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "data dashboard"
+    },
+    {
+      "id": "feature-ai",
+      "description": "An abstract representation of artificial intelligence, like glowing circuits.",
+      "imageUrl": "https://images.unsplash.com/photo-1534723328310-e82dad3ee43f?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHwxMHx8YXJ0aWZpY2lhbCUyMGludGVsbGlnZW5jZXxlbnwwfHx8fDE3NzA5OTcyNTV8MA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "artificial intelligence"
+    },
+    {
+      "id": "feature-report",
+      "description": "A person holding a tablet with a report on it.",
+      "imageUrl": "https://images.unsplash.com/photo-1665979738276-e41e815df1e1?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHw1fHxidXNpbmVzcyUyMHJlcG9ydHxlbnwwfHx8fDE3NzEwOTU3NjB8MA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "business report"
+    },
+    {
+      "id": "user-avatar-1",
+      "description": "A placeholder for a user avatar.",
+      "imageUrl": "https://images.unsplash.com/flagged/photo-1570612861542-284f4c12e75f?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHw1fHxwZXJzb24lMjBmYWNlfGVufDB8fHx8MTc3MTAwMTAyMnww&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "person face"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+
+{
+  "entities": {
+    "armState": {
+      "title": "REAT Arm State",
+      "description": "Real-time angles for 4 servos of the Mark I Robotic Arm.",
+      "type": "object",
+      "properties": {
+        "base": { "type": "number", "minimum": 0, "maximum": 180 },
+        "shoulder": { "type": "number", "minimum": 0, "maximum": 180 },
+        "elbow": { "type": "number", "minimum": 0, "maximum": 180 },
+        "pickup": { "type": "number", "minimum": 0, "maximum": 180 }
+      },
+      "required": ["base", "shoulder", "elbow", "pickup"]
+    }
+  },
+  "auth": {
+    "providers": ["anonymous"]
+  },
+  "firestore": {
+      "/REAT_Arm_State/status": {
+          "schema": {
+              "$ref": "#/backend/entities/armState"
+          },
+          "description": "Real-time state for console mirroring and hardware control via Cloud Firestore."
+      }
+  }
+}
