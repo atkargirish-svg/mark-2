@@ -7,7 +7,7 @@ import {
   MicIcon, Sliders, Bot, Activity, Circle, Loader2, ShieldCheck, 
   Volume2, VolumeX, RotateCcw, Smartphone, Target, Move, 
   Lock, Unlock, Gamepad2, Languages, Play, Square, Circle as CircleIcon, Trash2, History,
-  ArrowRightLeft, Gauge, Power, CircleStop, Save, MoveRight
+  ArrowRightLeft, Gauge, Power, CircleStop, Save, MoveRight, Radio, Timer
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardFooter } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/tabs-ui';
@@ -18,10 +18,10 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Progress } from '@/components/ui/progress';
-import type { ArmState, ChatMessage, RecordedStep } from '@/lib/types';
+import type { ArmState, ChatMessage } from '@/lib/types';
 import { DEFAULT_ARM_STATE } from '@/lib/types';
 
-const STORAGE_KEY = 'revo_industrial_v32';
+const STORAGE_KEY = 'revo_industrial_v33';
 
 const LANGUAGES = [
   { id: 'English', label: 'English', code: 'en-IN' },
@@ -34,13 +34,18 @@ const LANGUAGES = [
   { id: 'Punjabi', label: 'ਪੰਜਾਬੀ (Punjabi)', code: 'pa-IN' },
 ];
 
+interface MacroStep {
+  state: ArmState;
+  delay: number; // Delay since previous step in ms
+}
+
 export default function REVOConsole() {
   const { database } = useFirebase();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isHolding, setIsHolding] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [activeTab, setActiveTab] = useState('jarvis');
+  const [activeTab, setActiveTab] = useState('manual');
   const [isLevelLock, setIsLevelLock] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState('Hindi');
   const { toast } = useToast();
@@ -52,12 +57,14 @@ export default function REVOConsole() {
   const lastSentRef = useRef<number>(0);
   const THROTTLE_DELAY = 50;
 
-  // Dual-Point Automation State
-  const [startPos, setStartPos] = useState<ArmState>(DEFAULT_ARM_STATE);
-  const [endPos, setEndPos] = useState<ArmState>(DEFAULT_ARM_STATE);
+  // Macro Recording State
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedSteps, setRecordedSteps] = useState<MacroStep[]>([]);
+  const lastRecordTimeRef = useRef<number>(0);
+  
+  // Playback State
   const [isPlaying, setIsPlaying] = useState(false);
-  const [loopSpeed, setLoopSpeed] = useState(1500); // ms per move
-  const playbackTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const playbackTimeoutsRef = useRef<NodeJS.Timeout[]>([]);
 
   // Joystick refs
   const joystickRef = useRef<HTMLDivElement>(null);
@@ -77,7 +84,15 @@ export default function REVOConsole() {
       pickup: Math.round(state.pickup)            
     };
     set(ref(database, 'REAT_Arm_State'), physicalState);
-  }, [database]);
+
+    // If recording, add to steps
+    if (isRecording) {
+      const now = Date.now();
+      const delay = lastRecordTimeRef.current === 0 ? 0 : now - lastRecordTimeRef.current;
+      setRecordedSteps(prev => [...prev, { state: { ...state }, delay }]);
+      lastRecordTimeRef.current = now;
+    }
+  }, [database, isRecording]);
 
   const handleManualControl = (key: keyof ArmState, value: number) => {
     const newState = { ...localState, [key]: value };
@@ -100,39 +115,61 @@ export default function REVOConsole() {
     handleManualControl('pickup', newPickup);
   };
 
-  // Automation Logic
-  const captureStart = () => {
-    setStartPos({ ...localState });
-    toast({ title: "Start Position Set", description: "Current angles saved as start point." });
+  // Recording Logic
+  const startRecording = () => {
+    setRecordedSteps([]);
+    lastRecordTimeRef.current = 0;
+    setIsRecording(true);
+    toast({ title: "Recording Started", description: "All movements are being captured." });
   };
 
-  const captureEnd = () => {
-    setEndPos({ ...localState });
-    toast({ title: "End Position Set", description: "Current angles saved as end point." });
+  const stopRecording = () => {
+    setIsRecording(false);
+    toast({ title: "Recording Saved", description: `${recordedSteps.length} movements captured.` });
   };
 
-  const playIndustrialLoop = useCallback(() => {
+  const clearRecording = () => {
+    setRecordedSteps([]);
+    toast({ title: "Recording Cleared" });
+  };
+
+  // Playback Logic
+  const stopPlayback = useCallback(() => {
+    setIsPlaying(false);
+    playbackTimeoutsRef.current.forEach(clearTimeout);
+    playbackTimeoutsRef.current = [];
+    toast({ title: "Sequence Stopped", variant: "destructive" });
+  }, [toast]);
+
+  const playSequence = useCallback(() => {
+    if (recordedSteps.length === 0) return;
     setIsPlaying(true);
-    let goingToEnd = true;
-
-    const runLoop = () => {
-      const target = goingToEnd ? endPos : startPos;
-      setLocalState(target);
-      syncToFirebase(target);
-      
-      goingToEnd = !goingToEnd;
-      playbackTimerRef.current = setTimeout(runLoop, loopSpeed);
+    
+    let cumulativeDelay = 0;
+    
+    const executeSequence = () => {
+      cumulativeDelay = 0;
+      recordedSteps.forEach((step, index) => {
+        cumulativeDelay += step.delay;
+        
+        const timeout = setTimeout(() => {
+          setLocalState(step.state);
+          syncToFirebase(step.state);
+          
+          // Loop logic: If last step, restart after 1s
+          if (index === recordedSteps.length - 1) {
+            const loopTimeout = setTimeout(executeSequence, 1000);
+            playbackTimeoutsRef.current.push(loopTimeout);
+          }
+        }, cumulativeDelay);
+        
+        playbackTimeoutsRef.current.push(timeout);
+      });
     };
 
-    runLoop();
-    toast({ title: "Loop Started", description: "Robot is moving between A and B." });
-  }, [startPos, endPos, loopSpeed, syncToFirebase]);
-
-  const stopLoop = () => {
-    setIsPlaying(false);
-    if (playbackTimerRef.current) clearTimeout(playbackTimerRef.current);
-    toast({ title: "Loop Stopped", variant: "destructive" });
-  };
+    executeSequence();
+    toast({ title: "Playback Started", description: "Robot is repeating your sequence." });
+  }, [recordedSteps, syncToFirebase, toast]);
 
   // Joystick Logic
   const handleJoystickMove = (e: any) => {
@@ -269,7 +306,6 @@ export default function REVOConsole() {
         syncToFirebase(data.state);
 
         if (data.isIntro) {
-          // Play introduction sequence
           let introCycle = 0;
           const introInterval = setInterval(() => {
             if (introCycle >= 8 || !window.speechSynthesis.speaking) {
@@ -522,89 +558,101 @@ export default function REVOConsole() {
              </Card>
           </TabsContent>
 
-          {/* AUTOMATION STUDIO */}
+          {/* SEQUENCE RECORDER (INDUSTRIAL MACRO) */}
           <TabsContent value="record" className="w-full max-w-2xl h-full flex flex-col items-center justify-center gap-4 animate-in fade-in duration-300">
              <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-4 px-2">
-                {/* Start Position Card */}
-                <Card className="glass-card p-4 industrial-border bg-black/40 flex flex-col gap-3">
-                   <div className="flex justify-between items-center">
-                      <span className="text-[10px] font-black uppercase text-yellow-500">A: START POS</span>
-                      <Button onClick={captureStart} variant="ghost" size="icon" className="h-6 w-6 text-yellow-500 border border-yellow-500/20 hover:bg-yellow-500/10">
-                        <Save size={12} />
-                      </Button>
+                
+                {/* Status Card */}
+                <Card className="glass-card p-6 industrial-border bg-black/60 flex flex-col items-center justify-center gap-4">
+                   <div className="flex items-center gap-3">
+                      {isRecording ? (
+                        <Radio className="text-red-500 animate-pulse w-5 h-5" />
+                      ) : (
+                        <CircleIcon className="text-zinc-500 w-5 h-5" />
+                      )}
+                      <span className="text-xs font-black uppercase tracking-widest">
+                        {isRecording ? "SYSTEM RECORDING..." : (isPlaying ? "INDUSTRIAL PLAYBACK" : "RECORDER IDLE")}
+                      </span>
                    </div>
-                   <div className="space-y-3">
-                      {['base', 'shoulder', 'elbow', 'pickup'].map(axis => (
-                        <div key={axis} className="space-y-1">
-                           <div className="flex justify-between text-[7px] font-bold text-zinc-500 uppercase">
-                              <span>{axis}</span>
-                              <span className="text-yellow-500">{Math.round(startPos[axis as keyof ArmState])}°</span>
-                           </div>
-                           <input 
-                            type="range" min="0" max="180" step="1" value={startPos[axis as keyof ArmState]}
-                            onChange={(e) => setStartPos(prev => ({ ...prev, [axis]: parseInt(e.target.value) }))}
-                            className="w-full h-0.5 bg-zinc-800 rounded-full appearance-none accent-yellow-500"
-                           />
-                        </div>
-                      ))}
+                   
+                   <div className="flex flex-col items-center">
+                      <span className="text-[10px] text-zinc-500 font-bold uppercase mb-1 tracking-tighter">Frames Captured</span>
+                      <span className="text-4xl font-mono text-yellow-500 glow-text-gold">{recordedSteps.length}</span>
+                   </div>
+
+                   <div className="w-full flex gap-2">
+                      {!isRecording && !isPlaying && (
+                        <Button onClick={startRecording} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-black uppercase tracking-widest text-[9px] h-10 rounded-xl">
+                          Start New Record
+                        </Button>
+                      )}
+                      {isRecording && (
+                        <Button onClick={stopRecording} className="flex-1 bg-zinc-800 border border-white/10 hover:bg-zinc-700 text-white font-black uppercase tracking-widest text-[9px] h-10 rounded-xl">
+                          Stop & Save
+                        </Button>
+                      )}
+                      {!isRecording && isPlaying && (
+                        <Button onClick={stopPlayback} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-black uppercase tracking-widest text-[9px] h-10 rounded-xl flex items-center gap-2">
+                          <CircleStop size={14} /> Stop Playback
+                        </Button>
+                      )}
                    </div>
                 </Card>
 
-                {/* End Position Card */}
-                <Card className="glass-card p-4 industrial-border bg-black/40 flex flex-col gap-3">
-                   <div className="flex justify-between items-center">
-                      <span className="text-[10px] font-black uppercase text-cyan-400">B: END POS</span>
-                      <Button onClick={captureEnd} variant="ghost" size="icon" className="h-6 w-6 text-cyan-400 border border-cyan-400/20 hover:bg-cyan-400/10">
-                        <Save size={12} />
-                      </Button>
-                   </div>
-                   <div className="space-y-3">
-                      {['base', 'shoulder', 'elbow', 'pickup'].map(axis => (
-                        <div key={axis} className="space-y-1">
-                           <div className="flex justify-between text-[7px] font-bold text-zinc-500 uppercase">
-                              <span>{axis}</span>
-                              <span className="text-cyan-400">{Math.round(endPos[axis as keyof ArmState])}°</span>
-                           </div>
-                           <input 
-                            type="range" min="0" max="180" step="1" value={endPos[axis as keyof ArmState]}
-                            onChange={(e) => setEndPos(prev => ({ ...prev, [axis]: parseInt(e.target.value) }))}
-                            className="w-full h-0.5 bg-zinc-800 rounded-full appearance-none accent-cyan-400"
-                           />
-                        </div>
-                      ))}
-                   </div>
+                {/* Control Card */}
+                <Card className="glass-card p-6 industrial-border bg-black/60 flex flex-col gap-4">
+                    <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500 mb-2">SEQUENCE OPTIONS</h4>
+                    
+                    <div className="space-y-4">
+                       <div className="p-3 bg-black/20 rounded-lg border border-white/5 space-y-2">
+                          <div className="flex justify-between items-center">
+                             <span className="text-[9px] font-bold text-zinc-400">PLAYBACK MODE</span>
+                             <span className="text-[9px] font-black text-yellow-500 uppercase">INFINITE LOOP</span>
+                          </div>
+                          <p className="text-[8px] text-zinc-500 leading-tight uppercase">
+                            Robot will repeat the exact movement sequence and timing forever.
+                          </p>
+                       </div>
+
+                       <div className="flex gap-2">
+                          <Button 
+                            disabled={isRecording || isPlaying || recordedSteps.length === 0} 
+                            onClick={playSequence}
+                            className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-black font-black uppercase tracking-widest text-[9px] h-12 rounded-xl flex items-center justify-center gap-2"
+                          >
+                            <Play size={16} fill="currentColor" /> Play Sequence
+                          </Button>
+                          <Button 
+                            disabled={isRecording || isPlaying || recordedSteps.length === 0} 
+                            onClick={clearRecording}
+                            variant="ghost" 
+                            className="w-12 h-12 rounded-xl border border-white/5 hover:bg-red-500/10 hover:text-red-500"
+                          >
+                            <Trash2 size={16} />
+                          </Button>
+                       </div>
+                    </div>
                 </Card>
              </div>
 
-             <div className="w-full max-w-lg px-2 flex flex-col gap-4">
-                <Card className="glass-card p-4 industrial-border bg-black/40 space-y-4">
-                   <div className="flex justify-between items-center">
-                      <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Loop Speed (ms)</span>
-                      <span className="text-[10px] font-mono text-yellow-500">{loopSpeed}ms</span>
-                   </div>
-                   <input 
-                    type="range" min="500" max="5000" step="100" value={loopSpeed}
-                    onChange={(e) => setLoopSpeed(parseInt(e.target.value))}
-                    className="w-full h-1 bg-zinc-900 rounded-full appearance-none accent-yellow-500"
-                   />
-                </Card>
-
-                {isPlaying ? (
-                   <Button onClick={stopLoop} className="h-14 w-full bg-red-500 text-white font-black uppercase tracking-[0.2em] text-[10px] rounded-xl shadow-lg flex items-center justify-center gap-2 animate-pulse">
-                      <CircleStop size={18} /> STOP INDUSTRIAL LOOP
-                   </Button>
-                ) : (
-                   <Button onClick={playIndustrialLoop} className="h-14 w-full bg-yellow-500 text-black font-black uppercase tracking-[0.2em] text-[10px] rounded-xl shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all">
-                      <Play size={18} className="fill-current" /> START INDUSTRIAL LOOP
-                   </Button>
-                )}
-
-                <div className="p-3 bg-black/40 border border-white/5 rounded-lg text-center">
-                   <p className="text-[7px] text-zinc-500 leading-relaxed uppercase font-bold">
-                     Tip: Start aur End position set karo, phir Start Loop dabao. Robot factory arm ki tarah loop mein move karega.
-                   </p>
+             <Card className="w-full max-w-xl glass-card p-4 industrial-border bg-black/40">
+                <div className="flex items-center gap-2 mb-3">
+                   <Timer size={14} className="text-yellow-500" />
+                   <span className="text-[10px] font-black uppercase tracking-widest">Macro Instructions</span>
                 </div>
-             </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                   <div className="text-[8px] text-zinc-500 leading-relaxed uppercase space-y-1">
+                      <p>1. <span className="text-white">Start Recording</span> dabao.</p>
+                      <p>2. <span className="text-white">Manual Tab</span> mein jaakar robot move karo.</p>
+                      <p>3. Aapka <span className="text-white">Order</span> aur <span className="text-white">Delay</span> record ho raha hai.</p>
+                   </div>
+                   <div className="text-[8px] text-zinc-500 leading-relaxed uppercase space-y-1">
+                      <p>4. <span className="text-white">Stop</span> karke Play Sequence dabao.</p>
+                      <p>5. Robot <span className="text-yellow-500">Makkhan ki tarah</span> loop mein kaam karega.</p>
+                      <p>6. <span className="text-red-500">Stop</span> playback kisi bhi waqt.</p>
+                   </div>
+                </div>
+             </Card>
           </TabsContent>
 
           {/* GYRO */}
@@ -678,4 +726,3 @@ export default function REVOConsole() {
     </div>
   );
 }
-
