@@ -7,7 +7,7 @@ import {
   MicIcon, Sliders, Bot, Activity, Circle, Loader2, ShieldCheck, 
   Volume2, VolumeX, RotateCcw, Smartphone, Target, Move, 
   Lock, Unlock, Gamepad2, Languages, Play, Square, Circle as CircleIcon, Trash2, History,
-  ArrowRightLeft, Gauge, Power, CircleStop
+  ArrowRightLeft, Gauge, Power, CircleStop, Save, MoveRight
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardFooter } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/tabs-ui';
@@ -21,7 +21,7 @@ import { Progress } from '@/components/ui/progress';
 import type { ArmState, ChatMessage, RecordedStep } from '@/lib/types';
 import { DEFAULT_ARM_STATE } from '@/lib/types';
 
-const STORAGE_KEY = 'revo_industrial_v31';
+const STORAGE_KEY = 'revo_industrial_v32';
 
 const LANGUAGES = [
   { id: 'English', label: 'English', code: 'en-IN' },
@@ -52,11 +52,11 @@ export default function REVOConsole() {
   const lastSentRef = useRef<number>(0);
   const THROTTLE_DELAY = 50;
 
-  // Industrial Sequence State
-  const [recordedSteps, setRecordedSteps] = useState<RecordedStep[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
+  // Dual-Point Automation State
+  const [startPos, setStartPos] = useState<ArmState>(DEFAULT_ARM_STATE);
+  const [endPos, setEndPos] = useState<ArmState>(DEFAULT_ARM_STATE);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackIndex, setPlaybackIndex] = useState(0);
+  const [loopSpeed, setLoopSpeed] = useState(1500); // ms per move
   const playbackTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Joystick refs
@@ -82,17 +82,10 @@ export default function REVOConsole() {
   const handleManualControl = (key: keyof ArmState, value: number) => {
     const newState = { ...localState, [key]: value };
     setLocalState(newState);
-    
-    // Sync to hardware
     const now = Date.now();
     if (now - lastSentRef.current > THROTTLE_DELAY) {
       syncToFirebase(newState);
       lastSentRef.current = now;
-    }
-
-    // Record if active
-    if (isRecording) {
-      setRecordedSteps(prev => [...prev, { state: newState, timestamp: Date.now() }]);
     }
   };
 
@@ -107,57 +100,38 @@ export default function REVOConsole() {
     handleManualControl('pickup', newPickup);
   };
 
-  // Industrial Recording Logic
-  const startRecording = () => {
-    setRecordedSteps([]);
-    setIsRecording(true);
-    toast({ title: "Recording Started", description: "Every movement is being tracked." });
+  // Automation Logic
+  const captureStart = () => {
+    setStartPos({ ...localState });
+    toast({ title: "Start Position Set", description: "Current angles saved as start point." });
   };
 
-  const stopRecording = () => {
-    setIsRecording(false);
-    toast({ title: "Recording Saved", description: `${recordedSteps.length} movements captured.` });
+  const captureEnd = () => {
+    setEndPos({ ...localState });
+    toast({ title: "End Position Set", description: "Current angles saved as end point." });
   };
 
-  const clearRecording = () => {
-    setRecordedSteps([]);
-    toast({ title: "Sequence Cleared" });
-  };
-
-  const playSequence = useCallback(() => {
-    if (recordedSteps.length === 0) return;
+  const playIndustrialLoop = useCallback(() => {
     setIsPlaying(true);
-    setPlaybackIndex(0);
-    
-    const runStep = (index: number) => {
-      if (!isPlaying && index > 0) return; // Guard for stop
-      if (index >= recordedSteps.length) {
-        // Loop after a small delay
-        playbackTimerRef.current = setTimeout(() => runStep(0), 1000);
-        return;
-      }
+    let goingToEnd = true;
 
-      const currentStep = recordedSteps[index];
-      setLocalState(currentStep.state);
-      syncToFirebase(currentStep.state);
-      setPlaybackIndex(index);
-
-      if (index < recordedSteps.length - 1) {
-        const nextStep = recordedSteps[index + 1];
-        const delay = nextStep.timestamp - currentStep.timestamp;
-        playbackTimerRef.current = setTimeout(() => runStep(index + 1), Math.max(10, delay));
-      } else {
-        playbackTimerRef.current = setTimeout(() => runStep(0), 1000); // Loop
-      }
+    const runLoop = () => {
+      const target = goingToEnd ? endPos : startPos;
+      setLocalState(target);
+      syncToFirebase(target);
+      
+      goingToEnd = !goingToEnd;
+      playbackTimerRef.current = setTimeout(runLoop, loopSpeed);
     };
 
-    runStep(0);
-  }, [recordedSteps, isPlaying, syncToFirebase]);
+    runLoop();
+    toast({ title: "Loop Started", description: "Robot is moving between A and B." });
+  }, [startPos, endPos, loopSpeed, syncToFirebase]);
 
-  const stopPlayback = () => {
+  const stopLoop = () => {
     setIsPlaying(false);
     if (playbackTimerRef.current) clearTimeout(playbackTimerRef.current);
-    toast({ title: "Playback Stopped", variant: "destructive" });
+    toast({ title: "Loop Stopped", variant: "destructive" });
   };
 
   // Joystick Logic
@@ -196,10 +170,6 @@ export default function REVOConsole() {
 
     const newState = { ...localState, base: newBase, shoulder: newShoulder, elbow: newElbow };
     setLocalState(newState);
-
-    if (isRecording) {
-      setRecordedSteps(prev => [...prev, { state: newState, timestamp: Date.now() }]);
-    }
 
     const now = Date.now();
     if (now - lastSentRef.current > THROTTLE_DELAY) {
@@ -241,15 +211,13 @@ export default function REVOConsole() {
     if (Math.abs(newShoulder - localState.shoulder) > 1 || Math.abs(newBase - localState.base) > 1) {
       const newState = { ...localState, base: newBase, shoulder: newShoulder, elbow: newElbow };
       setLocalState(newState);
-      if (isRecording) setRecordedSteps(prev => [...prev, { state: newState, timestamp: Date.now() }]);
-      
       const now = Date.now();
       if (now - lastSentRef.current > THROTTLE_DELAY) {
         syncToFirebase(newState);
         lastSentRef.current = now;
       }
     }
-  }, [isGyroActive, activeTab, gyroOffset, localState, isLevelLock, isRecording, syncToFirebase]);
+  }, [isGyroActive, activeTab, gyroOffset, localState, isLevelLock, syncToFirebase]);
 
   useEffect(() => {
     if (isGyroActive && activeTab === 'gyro') {
@@ -299,6 +267,24 @@ export default function REVOConsole() {
       if (data.state) {
         setLocalState(data.state);
         syncToFirebase(data.state);
+
+        if (data.isIntro) {
+          // Play introduction sequence
+          let introCycle = 0;
+          const introInterval = setInterval(() => {
+            if (introCycle >= 8 || !window.speechSynthesis.speaking) {
+              clearInterval(introInterval);
+              return;
+            }
+            const pickupVal = introCycle % 2 === 0 ? 180 : 0;
+            setLocalState(prev => {
+              const next = { ...prev, pickup: pickupVal };
+              syncToFirebase(next);
+              return next;
+            });
+            introCycle++;
+          }, 800);
+        }
       }
 
       const assistantMsg: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: data.reply || "Done Boss!" };
@@ -536,59 +522,89 @@ export default function REVOConsole() {
              </Card>
           </TabsContent>
 
-          {/* SEQUENCE RECORDING */}
-          <TabsContent value="record" className="w-full max-w-lg h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-300">
-             <Card className="w-full glass-card p-6 flex flex-col gap-6 bg-black/40">
-                <div className="flex items-center justify-between">
-                   <div className="flex flex-col">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-yellow-500">Automation Studio</span>
-                      <span className="text-[7px] text-zinc-500 uppercase tracking-widest">Macro Record & Playback</span>
-                   </div>
-                   <div className="flex items-center gap-2">
-                      <div className={cn("w-2 h-2 rounded-full", isRecording ? "bg-red-500 animate-pulse" : "bg-zinc-800")} />
-                      <span className="text-[8px] font-bold text-zinc-400 uppercase">{isRecording ? "REC ACTIVE" : "IDLE"}</span>
-                   </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                   {!isRecording ? (
-                      <Button onClick={startRecording} className="h-12 bg-red-500/20 text-red-500 border border-red-500/30 hover:bg-red-500 hover:text-white transition-all font-black uppercase tracking-widest text-[9px] rounded-xl flex items-center gap-2">
-                         <CircleIcon className="w-3 h-3 fill-current" /> START RECORDING
+          {/* AUTOMATION STUDIO */}
+          <TabsContent value="record" className="w-full max-w-2xl h-full flex flex-col items-center justify-center gap-4 animate-in fade-in duration-300">
+             <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-4 px-2">
+                {/* Start Position Card */}
+                <Card className="glass-card p-4 industrial-border bg-black/40 flex flex-col gap-3">
+                   <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-black uppercase text-yellow-500">A: START POS</span>
+                      <Button onClick={captureStart} variant="ghost" size="icon" className="h-6 w-6 text-yellow-500 border border-yellow-500/20 hover:bg-yellow-500/10">
+                        <Save size={12} />
                       </Button>
-                   ) : (
-                      <Button onClick={stopRecording} className="h-12 bg-zinc-900 text-white border border-white/10 hover:bg-red-600 transition-all font-black uppercase tracking-widest text-[9px] rounded-xl flex items-center gap-2">
-                         <Square className="w-3 h-3 fill-current" /> STOP RECORDING
-                      </Button>
-                   )}
-                   <Button onClick={clearRecording} variant="outline" className="h-12 border-zinc-800 text-zinc-500 hover:text-yellow-500 font-black uppercase tracking-widest text-[9px] rounded-xl flex items-center gap-2">
-                      <Trash2 size={14} /> CLEAR ALL
-                   </Button>
-                </div>
-
-                <div className="space-y-4">
-                   <div className="flex justify-between items-center text-[8px] font-black uppercase tracking-widest text-zinc-500">
-                      <span>Timeline Frames</span>
-                      <span className="text-yellow-500 font-mono">{recordedSteps.length} captured</span>
                    </div>
-                   <Progress value={isPlaying ? (playbackIndex / recordedSteps.length) * 100 : 0} className="h-1.5 bg-zinc-900" />
-                </div>
+                   <div className="space-y-3">
+                      {['base', 'shoulder', 'elbow', 'pickup'].map(axis => (
+                        <div key={axis} className="space-y-1">
+                           <div className="flex justify-between text-[7px] font-bold text-zinc-500 uppercase">
+                              <span>{axis}</span>
+                              <span className="text-yellow-500">{Math.round(startPos[axis as keyof ArmState])}°</span>
+                           </div>
+                           <input 
+                            type="range" min="0" max="180" step="1" value={startPos[axis as keyof ArmState]}
+                            onChange={(e) => setStartPos(prev => ({ ...prev, [axis]: parseInt(e.target.value) }))}
+                            className="w-full h-0.5 bg-zinc-800 rounded-full appearance-none accent-yellow-500"
+                           />
+                        </div>
+                      ))}
+                   </div>
+                </Card>
+
+                {/* End Position Card */}
+                <Card className="glass-card p-4 industrial-border bg-black/40 flex flex-col gap-3">
+                   <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-black uppercase text-cyan-400">B: END POS</span>
+                      <Button onClick={captureEnd} variant="ghost" size="icon" className="h-6 w-6 text-cyan-400 border border-cyan-400/20 hover:bg-cyan-400/10">
+                        <Save size={12} />
+                      </Button>
+                   </div>
+                   <div className="space-y-3">
+                      {['base', 'shoulder', 'elbow', 'pickup'].map(axis => (
+                        <div key={axis} className="space-y-1">
+                           <div className="flex justify-between text-[7px] font-bold text-zinc-500 uppercase">
+                              <span>{axis}</span>
+                              <span className="text-cyan-400">{Math.round(endPos[axis as keyof ArmState])}°</span>
+                           </div>
+                           <input 
+                            type="range" min="0" max="180" step="1" value={endPos[axis as keyof ArmState]}
+                            onChange={(e) => setEndPos(prev => ({ ...prev, [axis]: parseInt(e.target.value) }))}
+                            className="w-full h-0.5 bg-zinc-800 rounded-full appearance-none accent-cyan-400"
+                           />
+                        </div>
+                      ))}
+                   </div>
+                </Card>
+             </div>
+
+             <div className="w-full max-w-lg px-2 flex flex-col gap-4">
+                <Card className="glass-card p-4 industrial-border bg-black/40 space-y-4">
+                   <div className="flex justify-between items-center">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Loop Speed (ms)</span>
+                      <span className="text-[10px] font-mono text-yellow-500">{loopSpeed}ms</span>
+                   </div>
+                   <input 
+                    type="range" min="500" max="5000" step="100" value={loopSpeed}
+                    onChange={(e) => setLoopSpeed(parseInt(e.target.value))}
+                    className="w-full h-1 bg-zinc-900 rounded-full appearance-none accent-yellow-500"
+                   />
+                </Card>
 
                 {isPlaying ? (
-                   <Button onClick={stopPlayback} className="h-14 w-full bg-yellow-500 text-black font-black uppercase tracking-[0.2em] text-[10px] rounded-xl shadow-[0_0_30px_rgba(255,191,0,0.3)] flex items-center justify-center gap-2 animate-pulse">
-                      <CircleStop size={18} /> STOP PLAYBACK
+                   <Button onClick={stopLoop} className="h-14 w-full bg-red-500 text-white font-black uppercase tracking-[0.2em] text-[10px] rounded-xl shadow-lg flex items-center justify-center gap-2 animate-pulse">
+                      <CircleStop size={18} /> STOP INDUSTRIAL LOOP
                    </Button>
                 ) : (
-                   <Button onClick={playSequence} disabled={recordedSteps.length === 0} className="h-14 w-full bg-green-500 text-black font-black uppercase tracking-[0.2em] text-[10px] rounded-xl shadow-[0_0_30px_rgba(34,197,94,0.3)] flex items-center justify-center gap-2 active:scale-95 transition-all">
+                   <Button onClick={playIndustrialLoop} className="h-14 w-full bg-yellow-500 text-black font-black uppercase tracking-[0.2em] text-[10px] rounded-xl shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all">
                       <Play size={18} className="fill-current" /> START INDUSTRIAL LOOP
                    </Button>
                 )}
 
-                <div className="p-3 bg-black/40 border border-white/5 rounded-lg">
-                   <p className="text-[7px] text-zinc-600 leading-relaxed uppercase font-bold">
-                     Tip: Sabse pehle record dabao, Manual tab mein robot ko apni marzi se move karo, aur phir yahan aakar playback chalao. Robot usi order mein move hoga.
+                <div className="p-3 bg-black/40 border border-white/5 rounded-lg text-center">
+                   <p className="text-[7px] text-zinc-500 leading-relaxed uppercase font-bold">
+                     Tip: Start aur End position set karo, phir Start Loop dabao. Robot factory arm ki tarah loop mein move karega.
                    </p>
                 </div>
-             </Card>
+             </div>
           </TabsContent>
 
           {/* GYRO */}
@@ -662,3 +678,4 @@ export default function REVOConsole() {
     </div>
   );
 }
+
