@@ -6,7 +6,8 @@ import { ref, set } from 'firebase/database';
 import { 
   MicIcon, Sliders, Bot, Activity, Circle, Loader2, ShieldCheck, 
   Volume2, VolumeX, RotateCcw, Smartphone, Target, Move, 
-  Lock, Unlock, Gamepad2, Languages, Play, Square, Circle as CircleIcon, Trash2, History
+  Lock, Unlock, Gamepad2, Languages, Play, Square, Circle as CircleIcon, Trash2, History,
+  ArrowRightLeft, Gauge, Power
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardFooter } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/tabs-ui';
@@ -16,10 +17,11 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { ArmState, ChatMessage, MovementFrame } from '@/lib/types';
+import { Progress } from '@/components/ui/progress';
+import type { ArmState, ChatMessage } from '@/lib/types';
 import { DEFAULT_ARM_STATE } from '@/lib/types';
 
-const STORAGE_KEY = 'revo_industrial_v29';
+const STORAGE_KEY = 'revo_industrial_v30';
 
 const LANGUAGES = [
   { id: 'English', label: 'English', code: 'en-IN' },
@@ -50,12 +52,14 @@ export default function REVOConsole() {
   const lastSentRef = useRef<number>(0);
   const THROTTLE_DELAY = 50;
 
-  // Recording & Playback State
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordedFrames, setRecordedFrames] = useState<MovementFrame[]>([]);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const recordStartRef = useRef<number>(0);
-  const playbackTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Industrial Sequence State
+  const [startFrame, setStartFrame] = useState<ArmState>(DEFAULT_ARM_STATE);
+  const [endFrame, setEndFrame] = useState<ArmState>({ ...DEFAULT_ARM_STATE, base: 180, shoulder: 180 });
+  const [isSequenceActive, setIsSequenceActive] = useState(false);
+  const [sequenceProgress, setSequenceProgress] = useState(0);
+  const [sequenceDirection, setSequenceDirection] = useState<'forward' | 'backward'>('forward');
+  const [sequenceSpeed, setSequenceSpeed] = useState(2000); // 2 seconds per trip
+  const sequenceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Joystick refs
   const joystickRef = useRef<HTMLDivElement>(null);
@@ -77,56 +81,63 @@ export default function REVOConsole() {
     set(ref(database, 'REAT_Arm_State'), physicalState);
   }, [database]);
 
-  // Recording Logic
+  // Industrial Sequence Logic
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isRecording) {
-      if (recordStartRef.current === 0) recordStartRef.current = Date.now();
-      
-      interval = setInterval(() => {
-        setRecordedFrames(prev => [
-          ...prev,
-          { ...localState, timestamp: Date.now() - recordStartRef.current }
-        ]);
-      }, 100);
+    if (isSequenceActive) {
+      const STEP_TIME = 50;
+      const totalSteps = sequenceSpeed / STEP_TIME;
+      const increment = 100 / totalSteps;
+
+      sequenceTimerRef.current = setInterval(() => {
+        setSequenceProgress(prev => {
+          let nextProgress;
+          let nextDir = sequenceDirection;
+
+          if (sequenceDirection === 'forward') {
+            nextProgress = prev + increment;
+            if (nextProgress >= 100) {
+              nextProgress = 100;
+              nextDir = 'backward';
+              setSequenceDirection('backward');
+            }
+          } else {
+            nextProgress = prev - increment;
+            if (nextProgress <= 0) {
+              nextProgress = 0;
+              nextDir = 'forward';
+              setSequenceDirection('forward');
+            }
+          }
+
+          // Interpolate Angles
+          const factor = nextProgress / 100;
+          const interpolatedState: ArmState = {
+            base: startFrame.base + (endFrame.base - startFrame.base) * factor,
+            shoulder: startFrame.shoulder + (endFrame.shoulder - startFrame.shoulder) * factor,
+            elbow: startFrame.elbow + (endFrame.elbow - startFrame.elbow) * factor,
+            pickup: nextProgress > 50 ? endFrame.pickup : startFrame.pickup
+          };
+
+          setLocalState(interpolatedState);
+          syncToFirebase(interpolatedState);
+          return nextProgress;
+        });
+      }, STEP_TIME);
     } else {
-      recordStartRef.current = 0;
+      if (sequenceTimerRef.current) clearInterval(sequenceTimerRef.current);
     }
-    return () => clearInterval(interval);
-  }, [isRecording, localState]);
 
-  const startPlayback = () => {
-    if (recordedFrames.length === 0) {
-      toast({ title: "No sequence recorded", variant: "destructive" });
-      return;
-    }
-    setIsPlaying(true);
-    const totalDuration = recordedFrames[recordedFrames.length - 1].timestamp;
-    let startTime = Date.now();
-
-    const play = () => {
-      const elapsed = Date.now() - startTime;
-      const loopTime = elapsed % totalDuration;
-      
-      // Find closest frame
-      const frame = recordedFrames.reduce((prev, curr) => 
-        Math.abs(curr.timestamp - loopTime) < Math.abs(prev.timestamp - loopTime) ? curr : prev
-      );
-
-      setLocalState(frame);
-      syncToFirebase(frame);
-      
-      if (isPlaying) playbackTimerRef.current = setTimeout(play, 50);
+    return () => {
+      if (sequenceTimerRef.current) clearInterval(sequenceTimerRef.current);
     };
+  }, [isSequenceActive, startFrame, endFrame, sequenceDirection, sequenceSpeed, syncToFirebase]);
 
-    play();
-    toast({ title: "Sequence Started" });
-  };
-
-  const stopPlayback = () => {
-    setIsPlaying(false);
-    if (playbackTimerRef.current) clearTimeout(playbackTimerRef.current);
-    toast({ title: "Sequence Stopped" });
+  const toggleSequence = () => {
+    setIsSequenceActive(!isSequenceActive);
+    toast({ 
+      title: isSequenceActive ? "Sequence Stopped" : "Industrial Loop Started", 
+      variant: isSequenceActive ? "destructive" : "default" 
+    });
   };
 
   const handleManualControl = (key: keyof ArmState, value: number) => {
@@ -579,61 +590,109 @@ export default function REVOConsole() {
              </Card>
           </TabsContent>
 
-          {/* RECORD / REPLAY */}
-          <TabsContent value="record" className="w-full max-w-lg h-full flex flex-col items-center justify-center animate-in fade-in duration-300">
-             <Card className="w-full glass-card p-6 flex flex-col items-center gap-6 relative">
-                <div className="text-center space-y-2">
-                   <h3 className="text-sm font-black uppercase tracking-widest text-white">Industrial Sequence Logic</h3>
-                   <p className="text-[7px] text-zinc-500 uppercase tracking-[0.2em]">Record manual paths and loop them infinitely</p>
-                </div>
-
-                <div className="flex gap-4 w-full">
-                   <Button 
-                    onClick={() => setIsRecording(!isRecording)} 
-                    disabled={isPlaying}
-                    className={cn(
-                      "flex-1 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 border-2 transition-all",
-                      isRecording ? "bg-red-500 text-white border-red-600 animate-pulse" : "bg-black/40 text-red-500 border-red-500/20 hover:border-red-500"
-                    )}
-                   >
-                      {isRecording ? <Square size={16} /> : <CircleIcon size={16} fill="currentColor" />}
-                      <span className="text-[8px] font-black uppercase tracking-widest">{isRecording ? 'STOP REC' : 'START REC'}</span>
-                   </Button>
-
-                   <Button 
-                    onClick={isPlaying ? stopPlayback : startPlayback}
-                    disabled={isRecording || recordedFrames.length === 0}
-                    className={cn(
-                      "flex-1 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 border-2 transition-all",
-                      isPlaying ? "bg-green-500 text-black border-green-600" : "bg-black/40 text-green-500 border-green-500/20 hover:border-green-500"
-                    )}
-                   >
-                      {isPlaying ? <Square size={16} /> : <Play size={16} fill="currentColor" />}
-                      <span className="text-[8px] font-black uppercase tracking-widest">{isPlaying ? 'STOP LOOP' : 'PLAY LOOP'}</span>
-                   </Button>
-                </div>
-
-                <div className="w-full grid grid-cols-2 gap-3">
-                   <Card className="bg-black/40 border-white/5 p-3 flex flex-col items-center">
-                      <span className="text-[7px] text-zinc-500 font-bold uppercase mb-1">Stored Frames</span>
-                      <span className="text-sm font-mono text-yellow-500">{recordedFrames.length}</span>
-                   </Card>
-                   <Button 
-                    variant="ghost" 
-                    onClick={() => { setRecordedFrames([]); stopPlayback(); }}
-                    className="h-full border border-zinc-800 text-zinc-600 hover:text-red-500 hover:bg-red-500/10 flex flex-col gap-1 rounded-xl"
-                   >
-                      <Trash2 size={16} />
-                      <span className="text-[8px] font-black">CLEAR ALL</span>
-                   </Button>
-                </div>
-
-                {isRecording && (
-                   <div className="flex items-center gap-2 text-[8px] font-black text-red-500 uppercase tracking-widest bg-red-500/10 px-4 py-2 rounded-full border border-red-500/20">
-                      <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
-                      Capturing Movements...
+          {/* INDUSTRIAL SEQUENCE */}
+          <TabsContent value="record" className="w-full max-w-4xl h-full flex flex-col items-center justify-center animate-in fade-in duration-300">
+             <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-4 px-2 mb-4 overflow-y-auto max-h-[60vh] py-2">
+                {/* Start Frame */}
+                <Card className="glass-card p-4 border-green-500/20">
+                   <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                         <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                         <span className="text-[9px] font-black uppercase tracking-widest text-green-500">Start Position</span>
+                      </div>
+                      <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => setStartFrame(localState)}>
+                         <History size={12} className="text-green-500" />
+                      </Button>
                    </div>
-                )}
+                   <div className="space-y-3">
+                      {['base', 'shoulder', 'elbow', 'pickup'].map(motor => (
+                        <div key={motor} className="space-y-1">
+                           <div className="flex justify-between text-[7px] font-bold uppercase text-zinc-500">
+                              <span>{motor}</span>
+                              <span className="text-green-500">{Math.round(startFrame[motor as keyof ArmState])}°</span>
+                           </div>
+                           <input 
+                            type="range" min="0" max="180" step="1" 
+                            value={startFrame[motor as keyof ArmState]}
+                            onChange={(e) => setStartFrame({...startFrame, [motor]: parseInt(e.target.value)})}
+                            className="w-full h-1 bg-zinc-800 rounded-full appearance-none accent-green-500"
+                           />
+                        </div>
+                      ))}
+                   </div>
+                </Card>
+
+                {/* End Frame */}
+                <Card className="glass-card p-4 border-red-500/20">
+                   <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                         <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                         <span className="text-[9px] font-black uppercase tracking-widest text-red-500">End Position</span>
+                      </div>
+                      <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => setEndFrame(localState)}>
+                         <History size={12} className="text-red-500" />
+                      </Button>
+                   </div>
+                   <div className="space-y-3">
+                      {['base', 'shoulder', 'elbow', 'pickup'].map(motor => (
+                        <div key={motor} className="space-y-1">
+                           <div className="flex justify-between text-[7px] font-bold uppercase text-zinc-500">
+                              <span>{motor}</span>
+                              <span className="text-red-500">{Math.round(endFrame[motor as keyof ArmState])}°</span>
+                           </div>
+                           <input 
+                            type="range" min="0" max="180" step="1" 
+                            value={endFrame[motor as keyof ArmState]}
+                            onChange={(e) => setEndFrame({...endFrame, [motor]: parseInt(e.target.value)})}
+                            className="w-full h-1 bg-zinc-800 rounded-full appearance-none accent-red-500"
+                           />
+                        </div>
+                      ))}
+                   </div>
+                </Card>
+             </div>
+
+             {/* Automation Control */}
+             <Card className="w-full max-w-lg glass-card p-4 flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                   <div className="flex flex-col">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-yellow-500">Industrial Automation</span>
+                      <span className="text-[7px] text-zinc-500 uppercase tracking-widest">Linear Interpolation Mode</span>
+                   </div>
+                   <div className="flex items-center gap-4">
+                      <div className="flex flex-col items-end">
+                         <span className="text-[7px] text-zinc-500 font-bold uppercase">Cycle Speed</span>
+                         <span className="text-[10px] font-mono text-yellow-500">{(sequenceSpeed/1000).toFixed(1)}s</span>
+                      </div>
+                      <input 
+                        type="range" min="500" max="5000" step="100" 
+                        value={sequenceSpeed}
+                        onChange={(e) => setSequenceSpeed(parseInt(e.target.value))}
+                        className="w-24 h-1 bg-zinc-800 rounded-full appearance-none accent-yellow-500"
+                      />
+                   </div>
+                </div>
+
+                <div className="space-y-2">
+                   <div className="flex justify-between text-[8px] font-black uppercase tracking-widest">
+                      <span className={cn(sequenceDirection === 'forward' ? "text-green-500" : "text-zinc-600")}>Start</span>
+                      <span className={cn(sequenceDirection === 'backward' ? "text-red-500" : "text-zinc-600")}>End</span>
+                   </div>
+                   <Progress value={sequenceProgress} className="h-2 bg-zinc-900" />
+                </div>
+
+                <Button 
+                  onClick={toggleSequence}
+                  className={cn(
+                    "w-full h-12 rounded-xl flex items-center justify-center gap-2 font-black uppercase tracking-[0.2em] text-[10px] transition-all",
+                    isSequenceActive 
+                      ? "bg-red-500 text-white shadow-[0_0_20px_rgba(239,68,68,0.4)]" 
+                      : "bg-green-500 text-black shadow-[0_0_20px_rgba(34,197,94,0.4)]"
+                  )}
+                >
+                   {isSequenceActive ? <Power className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
+                   {isSequenceActive ? "EMERGENCY STOP" : "START INDUSTRIAL LOOP"}
+                </Button>
              </Card>
           </TabsContent>
 
