@@ -3,7 +3,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useFirebase } from '@/firebase';
 import { ref, set } from 'firebase/database';
-import { MicIcon, Sliders, Bot, Activity, Circle, Loader2, ShieldCheck, Volume2, VolumeX, RotateCcw, Smartphone, Target, Move, Lock, Unlock, Gamepad2, Languages } from 'lucide-react';
+import { 
+  MicIcon, Sliders, Bot, Activity, Circle, Loader2, ShieldCheck, 
+  Volume2, VolumeX, RotateCcw, Smartphone, Target, Move, 
+  Lock, Unlock, Gamepad2, Languages, Play, Square, Circle as CircleIcon, Trash2, History
+} from 'lucide-react';
 import { Card, CardContent, CardHeader, CardFooter } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/tabs-ui';
 import { useToast } from '@/hooks/use-toast';
@@ -12,10 +16,10 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { ArmState, ChatMessage } from '@/lib/types';
+import type { ArmState, ChatMessage, MovementFrame } from '@/lib/types';
 import { DEFAULT_ARM_STATE } from '@/lib/types';
 
-const STORAGE_KEY = 'revo_industrial_v28';
+const STORAGE_KEY = 'revo_industrial_v29';
 
 const LANGUAGES = [
   { id: 'English', label: 'English', code: 'en-IN' },
@@ -44,8 +48,14 @@ export default function REVOConsole() {
   const currentTranscriptRef = useRef('');
   const [localState, setLocalState] = useState<ArmState>(DEFAULT_ARM_STATE);
   const lastSentRef = useRef<number>(0);
-  const introIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const THROTTLE_DELAY = 50;
+
+  // Recording & Playback State
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedFrames, setRecordedFrames] = useState<MovementFrame[]>([]);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const recordStartRef = useRef<number>(0);
+  const playbackTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Joystick refs
   const joystickRef = useRef<HTMLDivElement>(null);
@@ -67,6 +77,58 @@ export default function REVOConsole() {
     set(ref(database, 'REAT_Arm_State'), physicalState);
   }, [database]);
 
+  // Recording Logic
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isRecording) {
+      if (recordStartRef.current === 0) recordStartRef.current = Date.now();
+      
+      interval = setInterval(() => {
+        setRecordedFrames(prev => [
+          ...prev,
+          { ...localState, timestamp: Date.now() - recordStartRef.current }
+        ]);
+      }, 100);
+    } else {
+      recordStartRef.current = 0;
+    }
+    return () => clearInterval(interval);
+  }, [isRecording, localState]);
+
+  const startPlayback = () => {
+    if (recordedFrames.length === 0) {
+      toast({ title: "No sequence recorded", variant: "destructive" });
+      return;
+    }
+    setIsPlaying(true);
+    const totalDuration = recordedFrames[recordedFrames.length - 1].timestamp;
+    let startTime = Date.now();
+
+    const play = () => {
+      const elapsed = Date.now() - startTime;
+      const loopTime = elapsed % totalDuration;
+      
+      // Find closest frame
+      const frame = recordedFrames.reduce((prev, curr) => 
+        Math.abs(curr.timestamp - loopTime) < Math.abs(prev.timestamp - loopTime) ? curr : prev
+      );
+
+      setLocalState(frame);
+      syncToFirebase(frame);
+      
+      if (isPlaying) playbackTimerRef.current = setTimeout(play, 50);
+    };
+
+    play();
+    toast({ title: "Sequence Started" });
+  };
+
+  const stopPlayback = () => {
+    setIsPlaying(false);
+    if (playbackTimerRef.current) clearTimeout(playbackTimerRef.current);
+    toast({ title: "Sequence Stopped" });
+  };
+
   const handleManualControl = (key: keyof ArmState, value: number) => {
     const newState = { ...localState, [key]: value };
     setLocalState(newState);
@@ -86,33 +148,6 @@ export default function REVOConsole() {
   const toggleClaw = () => {
     const newPickup = localState.pickup > 90 ? 0 : 180;
     handleManualControl('pickup', newPickup);
-  };
-
-  // Intro Interaction Logic
-  const startIntroGestures = () => {
-    const homeState = { ...DEFAULT_ARM_STATE, pickup: 0 };
-    setLocalState(homeState);
-    syncToFirebase(homeState);
-
-    let currentClaw = 0;
-    if (introIntervalRef.current) clearInterval(introIntervalRef.current);
-    
-    introIntervalRef.current = setInterval(() => {
-      currentClaw = currentClaw === 0 ? 180 : 0;
-      setLocalState(prev => {
-        const updated = { ...prev, pickup: currentClaw };
-        syncToFirebase(updated);
-        return updated;
-      });
-    }, 1000);
-  };
-
-  const stopIntroGestures = () => {
-    if (introIntervalRef.current) {
-      clearInterval(introIntervalRef.current);
-      introIntervalRef.current = null;
-    }
-    handleManualControl('pickup', 0);
   };
 
   // Joystick Logic
@@ -239,21 +274,14 @@ export default function REVOConsole() {
       if (isMuted) return;
 
       const utterance = new SpeechSynthesisUtterance(text);
-      const langConfig = LANGUAGES.find(l => l.id === selectedLanguage) || LANGUAGES[1]; // Default Hindi
-      
+      const langConfig = LANGUAGES.find(l => l.id === selectedLanguage) || LANGUAGES[1];
       utterance.lang = langConfig.code;
       
       const voices = window.speechSynthesis.getVoices();
-      const voice = voices.find(v => v.lang === langConfig.code) || 
-                    voices.find(v => v.lang.startsWith(langConfig.code.split('-')[0]));
-      
+      const voice = voices.find(v => v.lang === langConfig.code);
       if (voice) utterance.voice = voice;
       
       utterance.rate = 1.0;
-      utterance.onend = () => {
-        if (isIntro) stopIntroGestures();
-      };
-      
       window.speechSynthesis.speak(utterance);
     }
   }, [isMuted, selectedLanguage]);
@@ -277,7 +305,7 @@ export default function REVOConsole() {
       });
       const data = await response.json();
       
-      if (data.state && !data.isIntro) {
+      if (data.state) {
         setLocalState(data.state);
         syncToFirebase(data.state);
       }
@@ -285,9 +313,7 @@ export default function REVOConsole() {
       const assistantMsg: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: data.reply || "Done Boss!" };
       setMessages(prev => [...prev, assistantMsg]);
       setIsProcessing(false);
-      
-      if (data.isIntro) startIntroGestures();
-      speak(assistantMsg.content, data.isIntro);
+      speak(assistantMsg.content);
     } catch (error) {
       setIsProcessing(false);
     }
@@ -363,7 +389,7 @@ export default function REVOConsole() {
         </div>
       </nav>
 
-      {/* Main Content Area - Center Aligned */}
+      {/* Main Content Area */}
       <div className="flex-grow relative z-10 overflow-hidden flex flex-col items-center justify-center pb-24">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full h-full flex flex-col items-center justify-center">
           
@@ -413,7 +439,7 @@ export default function REVOConsole() {
              </Card>
           </TabsContent>
 
-          {/* MANUAL - 2X2 GRID */}
+          {/* MANUAL */}
           <TabsContent value="manual" className="w-full max-w-lg h-full flex flex-col items-center justify-center gap-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
              <div className="w-full space-y-4 px-2 flex flex-col items-center">
                 <div className="grid grid-cols-2 gap-3 w-full">
@@ -460,29 +486,10 @@ export default function REVOConsole() {
                        RESET HOME
                     </Button>
                 </div>
-
-                <Card className="w-full glass-card p-3 border-yellow-500/5">
-                    <div className="flex justify-between items-center">
-                       <div className="flex gap-4">
-                          <div className="flex flex-col">
-                            <span className="text-[6px] text-zinc-600 font-bold uppercase">Signal</span>
-                            <span className="text-[10px] font-mono text-green-500">STABLE</span>
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="text-[6px] text-zinc-600 font-bold uppercase">Battery</span>
-                            <span className="text-[10px] font-mono text-yellow-500">12.4V</span>
-                          </div>
-                       </div>
-                       <div className="flex items-center gap-1.5 px-3 py-1 bg-green-500/5 rounded-full border border-green-500/10">
-                          <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                          <span className="text-[7px] font-black text-green-500 tracking-tighter">LINK ACTIVE</span>
-                       </div>
-                    </div>
-                </Card>
              </div>
           </TabsContent>
 
-          {/* ANALOG - JOYSTICK */}
+          {/* ANALOG */}
           <TabsContent value="analog" className="w-full max-w-lg h-full flex flex-col items-center justify-center animate-in fade-in duration-300 touch-none select-none">
              <Card className="w-full glass-card p-8 flex flex-col items-center gap-8 relative">
                 <div className="absolute top-4 right-4 flex items-center gap-2">
@@ -530,15 +537,7 @@ export default function REVOConsole() {
                    </div>
 
                    <div className="flex flex-col items-center justify-center gap-4">
-                      <Button 
-                        onClick={toggleClaw}
-                        className={cn(
-                          "w-24 h-24 rounded-2xl flex flex-col items-center justify-center gap-2 border-2 transition-all active:scale-95",
-                          localState.pickup > 90 
-                            ? "bg-yellow-500 text-black border-yellow-600 shadow-xl" 
-                            : "bg-black/40 text-yellow-500 border-yellow-500/20"
-                        )}
-                      >
+                      <Button onClick={toggleClaw} className={cn("w-24 h-24 rounded-2xl flex flex-col items-center justify-center gap-2 border-2 transition-all active:scale-95", localState.pickup > 90 ? "bg-yellow-500 text-black border-yellow-600" : "bg-black/40 text-yellow-500 border-yellow-500/20")}>
                         {localState.pickup > 90 ? <Lock size={24} /> : <Unlock size={24} />}
                         <span className="text-[8px] font-black uppercase tracking-tighter">{localState.pickup > 90 ? 'LOCKED' : 'FREE'}</span>
                       </Button>
@@ -547,7 +546,7 @@ export default function REVOConsole() {
              </Card>
           </TabsContent>
 
-          {/* GYRO - MOTION CONTROL */}
+          {/* GYRO */}
           <TabsContent value="gyro" className="w-full max-w-lg h-full flex flex-col items-center justify-center animate-in fade-in duration-300 touch-none select-none">
              <Card className="w-full glass-card p-8 flex flex-col items-center justify-center gap-8 relative">
                 {!isGyroActive ? (
@@ -555,32 +554,13 @@ export default function REVOConsole() {
                       <div className="w-20 h-20 rounded-full bg-yellow-500/10 flex items-center justify-center border-2 border-yellow-500/20 mx-auto animate-pulse">
                          <Smartphone size={32} className="text-yellow-500" />
                       </div>
-                      <div className="space-y-2">
-                        <h3 className="text-base font-black uppercase tracking-widest text-white">Motion Link Offline</h3>
-                        <p className="text-[8px] text-zinc-500 uppercase tracking-widest">Activate sensors for precision control</p>
-                      </div>
                       <Button onClick={requestGyroPermission} className="bg-yellow-500 hover:bg-yellow-600 text-black font-black uppercase tracking-widest px-8 h-12 rounded-xl shadow-lg text-[9px]">
                          ACTIVATE SENSORS
                       </Button>
                    </div>
                 ) : (
                    <div className="w-full space-y-8 flex flex-col items-center">
-                      <div className="flex justify-between w-full">
-                         <div className="flex flex-col">
-                            <span className="text-[8px] font-black uppercase text-zinc-500">Tilt Tracking</span>
-                            <span className="text-sm font-mono text-yellow-500 uppercase tracking-tighter">{Math.round(localState.base)}° B | {Math.round(localState.shoulder)}° S</span>
-                         </div>
-                         <div className="flex items-center gap-3">
-                            <span className="text-[8px] font-black uppercase text-zinc-500">Auto-Level</span>
-                            <Switch checked={isLevelLock} onCheckedChange={setIsLevelLock} className="scale-75 data-[state=checked]:bg-yellow-500" />
-                         </div>
-                      </div>
-
                       <div className="w-48 h-40 rounded-full border-4 border-yellow-500/20 bg-black/20 flex items-center justify-center relative overflow-hidden">
-                         <div className="absolute inset-0 border border-white/5 rounded-full" />
-                         <div className="absolute inset-[30%] border border-white/5 rounded-full" />
-                         <div className="w-px h-full bg-white/5 absolute left-1/2" />
-                         <div className="h-px w-full bg-white/5 absolute top-1/2" />
                          <div 
                            className="w-12 h-12 rounded-full bg-yellow-500 border-2 border-black shadow-[0_0_25px_rgba(255,191,0,0.5)] flex items-center justify-center transition-transform duration-100 ease-out"
                            style={{ transform: `translate(${(currentOrientation.gamma - gyroOffset.gamma) * 1.5}px, ${(currentOrientation.beta - gyroOffset.beta) * 1.5}px)` }}
@@ -588,38 +568,92 @@ export default function REVOConsole() {
                             <Target className="text-black w-6 h-6" />
                          </div>
                       </div>
-
                       <div className="grid grid-cols-2 gap-4 w-full">
-                         <Button onClick={calibrateGyro} variant="outline" className="h-12 border-zinc-800 text-zinc-400 font-black uppercase tracking-widest text-[8px] rounded-xl hover:text-white">
-                            RE-CALIBRATE
-                         </Button>
+                         <Button onClick={calibrateGyro} variant="outline" className="h-12 border-zinc-800 text-zinc-400 font-black uppercase tracking-widest text-[8px] rounded-xl hover:text-white">RE-CALIBRATE</Button>
                          <Button onClick={toggleClaw} className={cn("h-12 font-black uppercase tracking-widest text-[8px] rounded-xl border-2 shadow-lg", localState.pickup > 90 ? "bg-yellow-500 text-black border-yellow-600" : "bg-zinc-900 text-yellow-500 border-yellow-500/20")}>
-                            {localState.pickup > 90 ? 'LOCK CLAW' : 'FREE CLAW'}
+                            {localState.pickup > 90 ? 'LOCK' : 'FREE'}
                          </Button>
                       </div>
+                   </div>
+                )}
+             </Card>
+          </TabsContent>
 
-                      <Button variant="ghost" onClick={() => setIsGyroActive(false)} className="text-[7px] font-black uppercase tracking-[0.3em] text-zinc-600 hover:text-red-500">
-                         DISCONNECT SENSOR LINK
-                      </Button>
+          {/* RECORD / REPLAY */}
+          <TabsContent value="record" className="w-full max-w-lg h-full flex flex-col items-center justify-center animate-in fade-in duration-300">
+             <Card className="w-full glass-card p-6 flex flex-col items-center gap-6 relative">
+                <div className="text-center space-y-2">
+                   <h3 className="text-sm font-black uppercase tracking-widest text-white">Industrial Sequence Logic</h3>
+                   <p className="text-[7px] text-zinc-500 uppercase tracking-[0.2em]">Record manual paths and loop them infinitely</p>
+                </div>
+
+                <div className="flex gap-4 w-full">
+                   <Button 
+                    onClick={() => setIsRecording(!isRecording)} 
+                    disabled={isPlaying}
+                    className={cn(
+                      "flex-1 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 border-2 transition-all",
+                      isRecording ? "bg-red-500 text-white border-red-600 animate-pulse" : "bg-black/40 text-red-500 border-red-500/20 hover:border-red-500"
+                    )}
+                   >
+                      {isRecording ? <Square size={16} /> : <CircleIcon size={16} fill="currentColor" />}
+                      <span className="text-[8px] font-black uppercase tracking-widest">{isRecording ? 'STOP REC' : 'START REC'}</span>
+                   </Button>
+
+                   <Button 
+                    onClick={isPlaying ? stopPlayback : startPlayback}
+                    disabled={isRecording || recordedFrames.length === 0}
+                    className={cn(
+                      "flex-1 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 border-2 transition-all",
+                      isPlaying ? "bg-green-500 text-black border-green-600" : "bg-black/40 text-green-500 border-green-500/20 hover:border-green-500"
+                    )}
+                   >
+                      {isPlaying ? <Square size={16} /> : <Play size={16} fill="currentColor" />}
+                      <span className="text-[8px] font-black uppercase tracking-widest">{isPlaying ? 'STOP LOOP' : 'PLAY LOOP'}</span>
+                   </Button>
+                </div>
+
+                <div className="w-full grid grid-cols-2 gap-3">
+                   <Card className="bg-black/40 border-white/5 p-3 flex flex-col items-center">
+                      <span className="text-[7px] text-zinc-500 font-bold uppercase mb-1">Stored Frames</span>
+                      <span className="text-sm font-mono text-yellow-500">{recordedFrames.length}</span>
+                   </Card>
+                   <Button 
+                    variant="ghost" 
+                    onClick={() => { setRecordedFrames([]); stopPlayback(); }}
+                    className="h-full border border-zinc-800 text-zinc-600 hover:text-red-500 hover:bg-red-500/10 flex flex-col gap-1 rounded-xl"
+                   >
+                      <Trash2 size={16} />
+                      <span className="text-[8px] font-black">CLEAR ALL</span>
+                   </Button>
+                </div>
+
+                {isRecording && (
+                   <div className="flex items-center gap-2 text-[8px] font-black text-red-500 uppercase tracking-widest bg-red-500/10 px-4 py-2 rounded-full border border-red-500/20">
+                      <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
+                      Capturing Movements...
                    </div>
                 )}
              </Card>
           </TabsContent>
 
           {/* NAVIGATION */}
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-[94%] max-w-md">
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-[94%] max-w-lg">
              <TabsList className="bg-black/60 border border-yellow-500/30 p-1 rounded-full shadow-[0_0_40px_rgba(255,191,0,0.15)] backdrop-blur-xl flex gap-1 h-auto items-center justify-between">
                 <TabsTrigger value="jarvis" className="rounded-full flex-1 h-11 data-[state=active]:bg-yellow-500 data-[state=active]:text-black transition-all">
-                   <Bot size={16} className="md:mr-2" /> <span className="hidden md:inline text-[9px] font-black uppercase tracking-widest">Jarvis</span>
+                   <Bot size={16} />
                 </TabsTrigger>
                 <TabsTrigger value="manual" className="rounded-full flex-1 h-11 data-[state=active]:bg-yellow-500 data-[state=active]:text-black transition-all">
-                   <Sliders size={16} className="md:mr-2" /> <span className="hidden md:inline text-[9px] font-black uppercase tracking-widest">Manual</span>
+                   <Sliders size={16} />
                 </TabsTrigger>
                 <TabsTrigger value="analog" className="rounded-full flex-1 h-11 data-[state=active]:bg-yellow-500 data-[state=active]:text-black transition-all">
-                   <Gamepad2 size={16} className="md:mr-2" /> <span className="hidden md:inline text-[9px] font-black uppercase tracking-widest">Analog</span>
+                   <Gamepad2 size={16} />
+                </TabsTrigger>
+                <TabsTrigger value="record" className="rounded-full flex-1 h-11 data-[state=active]:bg-yellow-500 data-[state=active]:text-black transition-all">
+                   <History size={16} />
                 </TabsTrigger>
                 <TabsTrigger value="gyro" className="rounded-full flex-1 h-11 data-[state=active]:bg-yellow-500 data-[state=active]:text-black transition-all">
-                   <Smartphone size={16} className="md:mr-2" /> <span className="hidden md:inline text-[9px] font-black uppercase tracking-widest">Gyro</span>
+                   <Smartphone size={16} />
                 </TabsTrigger>
              </TabsList>
           </div>

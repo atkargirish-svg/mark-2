@@ -5,6 +5,10 @@ export interface ArmState {
   pickup: number;
 }
 
+export interface MovementFrame extends ArmState {
+  timestamp: number;
+}
+
 export interface BrainResponse {
   state: ArmState;
   reply: string;
